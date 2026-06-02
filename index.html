@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SafetyZone Gen</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <aside class="sidebar">
+      <header class="brand">
+        <div class="brand-mark">⌁</div>
+        <div>
+          <h1>SafetyZone Gen</h1>
+          <p>Генератор зон безопасности</p>
+        </div>
+      </header>
+
+      <section class="panel">
+        <h2>Файл</h2>
+        <label class="dropzone" id="dropzone">
+          <input id="fileInput" type="file" accept="image/png,image/jpeg" />
+          <span class="upload-icon">⇧</span>
+          <strong>Загрузить PNG/JPG</strong>
+          <small>или вставить Ctrl+V</small>
+        </label>
+      </section>
+
+      <section class="panel">
+        <h2>Параметры зоны</h2>
+        <label class="control-row">
+          <span>Базовый радиус</span>
+          <output id="radiusOut">120px</output>
+        </label>
+        <input id="radius" type="range" min="10" max="420" value="120" />
+
+        <div class="offset-box">
+          <strong>Смещение / отступы (px)</strong>
+          <div class="offset-grid">
+            <label><span>↑</span><input id="offsetTop" type="number" value="0" /></label>
+            <label><span>↓</span><input id="offsetBottom" type="number" value="0" /></label>
+            <label><span>←</span><input id="offsetLeft" type="number" value="0" /></label>
+            <label><span>→</span><input id="offsetRight" type="number" value="0" /></label>
+          </div>
+        </div>
+
+        <label class="control-row">
+          <span>Толщина линии</span>
+          <output id="lineWidthOut">2px</output>
+        </label>
+        <input id="lineWidth" type="range" min="1" max="8" value="2" />
+
+        <label class="control-row">
+          <span>Сглаживание контура</span>
+        <output id="roundingOut">100%</output>
+        </label>
+        <input id="rounding" type="range" min="0" max="100" value="100" />
+
+        <label class="control-row">
+          <span>Чувствительность</span>
+          <output id="sensitivityOut">120</output>
+        </label>
+        <input id="sensitivity" type="range" min="30" max="240" value="120" />
+
+        <label class="control-row">
+          <span>Прозрачность</span>
+          <output id="opacityOut">100%</output>
+        </label>
+        <input id="opacity" type="range" min="10" max="100" value="100" />
+
+        <div class="swatches" id="swatches" aria-label="Цвет зоны">
+          <button class="swatch active" data-color="#ff4545" style="--c:#ff4545" aria-label="Красный"></button>
+          <button class="swatch" data-color="#111827" style="--c:#111827" aria-label="Черный"></button>
+          <button class="swatch" data-color="#2ecc71" style="--c:#2ecc71" aria-label="Зеленый"></button>
+          <button class="swatch" data-color="#3b82f6" style="--c:#3b82f6" aria-label="Синий"></button>
+          <button class="swatch" data-color="#f59e0b" style="--c:#f59e0b" aria-label="Оранжевый"></button>
+        </div>
+
+        <label class="toggle">
+          <span>Показать оригинал</span>
+          <input id="showOriginal" type="checkbox" checked />
+        </label>
+      </section>
+
+      <section class="panel">
+        <h2>Замеры радиуса</h2>
+        <div class="measure-actions">
+          <button class="primary" id="addHorizontalMeasure">↔ Горизонтальный</button>
+          <button class="primary secondary" id="addVerticalMeasure">↕ Вертикальный</button>
+          <button class="primary secondary" id="addRadiusMeasure">↗ Радиус</button>
+        </div>
+        <button class="ghost" id="deleteMeasure">Удалить выбранный</button>
+      </section>
+
+      <button class="export" id="exportBtn">⇩ Экспорт .png</button>
+    </aside>
+
+    <main class="workspace">
+      <nav class="topbar">
+        <button id="toggleGrid">▦ Сетка</button>
+        <button id="toggleDashes">◌ Пунктир</button>
+        <button id="toggleDots">○ Кружки</button>
+        <div class="zoom-tools">
+          <button id="zoomOut">−</button>
+          <span id="zoomLabel">100%</span>
+          <button id="zoomIn">＋</button>
+          <button id="centerView">Центр</button>
+        </div>
+        <button class="select-active">⌁ Выбор</button>
+      </nav>
+
+      <section class="canvas-shell" id="canvasShell">
+        <canvas id="canvas" width="1200" height="820"></canvas>
+        <div class="empty-state" id="emptyState">
+          <div class="ruler">◿</div>
+          <h2>Нет чертежа</h2>
+          <p>Загрузите изображение или нажмите <kbd>Ctrl</kbd>+<kbd>V</kbd></p>
+        </div>
+      </section>
+    </main>
+
+    <aside class="properties">
+      <section class="prop-card">
+        <h2>Свойства замера</h2>
+        <label>
+          <span>Тип</span>
+          <select id="measureType">
+            <option value="linear">Линейный</option>
+            <option value="radius">Радиус</option>
+          </select>
+        </label>
+        <label>
+          <span>Текст</span>
+          <input id="measureText" value="R 150" />
+        </label>
+        <label>
+          <span>Единицы</span>
+          <select id="measureUnit">
+            <option>см</option>
+            <option>мм</option>
+            <option>м</option>
+            <option>px</option>
+          </select>
+        </label>
+        <label>
+          <span>Цвет</span>
+          <input id="measureColor" type="color" value="#000000" />
+        </label>
+      </section>
+    </aside>
+
+    <script src="app.js"></script>
+  </body>
+</html>
