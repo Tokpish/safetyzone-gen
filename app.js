@@ -595,13 +595,23 @@ function drawRadiusDimension(measure, label) {
   const b = measure.b;
   const angle = Math.atan2(b.y - a.y, b.x - a.x);
   const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+  const textOffset = -18;
+  const normal = {
+    x: -Math.sin(angle),
+    y: Math.cos(angle),
+  };
 
   ctx.beginPath();
   ctx.moveTo(a.x, a.y);
   ctx.lineTo(b.x, b.y);
   ctx.stroke();
   drawArrowHead(b, angle, true);
-  drawDimensionText(label, mid.x, mid.y - 18, angle);
+  drawDimensionText(
+    label,
+    mid.x + normal.x * textOffset,
+    mid.y + normal.y * textOffset,
+    angle
+  );
 }
 
 function drawArrowHead(point, angle, forward) {
