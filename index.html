@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>SafetyZone Gen</title>
-    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="styles.css?v=20260930" />
   </head>
   <body>
     <aside class="sidebar">
@@ -146,9 +146,15 @@
           <span>Цвет</span>
           <input id="measureColor" type="color" value="#000000" />
         </label>
+        <div id="linearMeasureOptions" hidden>
+          <label class="binding-toggle">
+            <input id="measureBinding" type="checkbox" />
+            <span>Привязать к зоне</span>
+          </label>
+        </div>
       </section>
     </aside>
 
-    <script src="app.js"></script>
+    <script src="app.js?v=20260930"></script>
   </body>
 </html>

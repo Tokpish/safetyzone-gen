@@ -8,6 +8,7 @@ const state = {
   imageName: 'safety-zone.png',
   imageRect: { x: 240, y: 150, w: 680, h: 520 },
   zonePoints: [],
+  zoneContours: [],
   color: '#ff4545',
   showOriginal: true,
   dashed: false,
@@ -41,6 +42,8 @@ const controls = {
   measureType: document.getElementById('measureType'),
   measureUnit: document.getElementById('measureUnit'),
   measureColor: document.getElementById('measureColor'),
+  measureBinding: document.getElementById('measureBinding'),
+  linearMeasureOptions: document.getElementById('linearMeasureOptions'),
 };
 
 function fitCanvas() {
@@ -108,20 +111,22 @@ function seedMeasures() {
 function buildZone() {
   if (!state.image) return;
   const radius = Number(controls.radius.value);
-  const padding = radius + 36 + Math.max(
-    Number(controls.offsetTop.value) || 0,
-    Number(controls.offsetBottom.value) || 0,
-    Number(controls.offsetLeft.value) || 0,
-    Number(controls.offsetRight.value) || 0
-  );
+  const offsets = {
+    top: Number(controls.offsetTop.value) || 0,
+    bottom: Number(controls.offsetBottom.value) || 0,
+    left: Number(controls.offsetLeft.value) || 0,
+    right: Number(controls.offsetRight.value) || 0,
+  };
+  const padding = radius + 36 + Math.max(0, offsets.top, offsets.bottom)
+    + Math.max(0, offsets.left, offsets.right);
   const maxSide = Math.max(state.imageRect.w + padding * 2, state.imageRect.h + padding * 2);
   const scale = Math.min(1, 680 / maxSide);
   const w = Math.ceil((state.imageRect.w + padding * 2) * scale);
   const h = Math.ceil((state.imageRect.h + padding * 2) * scale);
-  const imageX = Math.round(padding * scale);
-  const imageY = Math.round(padding * scale);
   const imageW = Math.max(1, Math.round(state.imageRect.w * scale));
   const imageH = Math.max(1, Math.round(state.imageRect.h * scale));
+  const imageX = Math.floor((w - imageW) / 2);
+  const imageY = Math.floor((h - imageH) / 2);
 
   const off = document.createElement('canvas');
   off.width = w;
@@ -150,147 +155,34 @@ function buildZone() {
 
   if (sourceCount < 8) {
     state.zonePoints = [];
+    state.zoneContours = [];
     return;
   }
 
   const distance = distanceTransform(source, w, h);
   const radiusGrid = Math.max(2, radius * scale);
-  const radiusSq = radiusGrid * radiusGrid;
-  const zoneMask = new Uint8Array(w * h);
+  const field = new Float64Array(w * h);
   const smoothLevel = Number(controls.rounding.value);
 
-  const offsets = {
-    top: Number(controls.offsetTop.value) || 0,
-    bottom: Number(controls.offsetBottom.value) || 0,
-    left: Number(controls.offsetLeft.value) || 0,
-    right: Number(controls.offsetRight.value) || 0,
-  };
-
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
-      const dx = x - (imageX + imageW / 2);
-      const dy = y - (imageY + imageH / 2);
+      const dx = x - (imageX + (imageW - 1) / 2);
+      const dy = y - (imageY + (imageH - 1) / 2);
       const sideOffset = ((dx < 0 ? offsets.left : offsets.right) + (dy < 0 ? offsets.top : offsets.bottom)) * scale;
-      const localRadius = radiusGrid + sideOffset;
-      zoneMask[y * w + x] = distance[y * w + x] <= localRadius * localRadius ? 1 : 0;
+      const localRadius = Math.max(0.5, radiusGrid + sideOffset);
+      field[y * w + x] = Math.sqrt(distance[y * w + x]) - localRadius;
     }
   }
 
-  const closedMask = closeMask(zoneMask, w, h, Math.max(3, Math.round(radiusGrid * 0.24 + smoothLevel * 0.12)));
-  const contour = outerEnvelopeFromMask(closedMask, w, h, smoothLevel);
-  const smoothContour = smoothClosedPolyline(contour, Math.max(4, Math.round(smoothLevel / 16)));
-  state.zonePoints = smoothContour.map((p) => ({
-    x: state.imageRect.x - padding + p.x / scale,
-    y: state.imageRect.y - padding + p.y / scale,
-  }));
+  // Trace the actual distance isoline, without fitting a radial envelope around it.
+  state.zoneContours = marchingSquares(field, w, h)
+    .filter((contour) => signedArea(contour) > 0)
+    .map((contour) => smoothClosedPolyline(contour, Math.round(smoothLevel / 50)).map((p) => ({
+      x: state.imageRect.x + (p.x + 0.5 - imageX) * state.imageRect.w / imageW,
+      y: state.imageRect.y + (p.y + 0.5 - imageY) * state.imageRect.h / imageH,
+    })));
+  state.zonePoints = state.zoneContours.flat();
   syncBoundMeasures();
-}
-
-function outerEnvelopeFromMask(mask, w, h, smoothLevel) {
-  let minX = w;
-  let minY = h;
-  let maxX = 0;
-  let maxY = 0;
-  const boundary = [];
-
-  for (let y = 1; y < h - 1; y++) {
-    for (let x = 1; x < w - 1; x++) {
-      if (!mask[y * w + x]) continue;
-      minX = Math.min(minX, x);
-      minY = Math.min(minY, y);
-      maxX = Math.max(maxX, x);
-      maxY = Math.max(maxY, y);
-      if (
-        !mask[y * w + x - 1] ||
-        !mask[y * w + x + 1] ||
-        !mask[(y - 1) * w + x] ||
-        !mask[(y + 1) * w + x]
-      ) {
-        boundary.push({ x, y });
-      }
-    }
-  }
-
-  if (boundary.length < 8) return [];
-
-  const cx = (minX + maxX) / 2;
-  const cy = (minY + maxY) / 2;
-  const bucketCount = 360;
-  const radii = Array.from({ length: bucketCount }, () => 0);
-
-  boundary.forEach((p) => {
-    const angle = Math.atan2(p.y - cy, p.x - cx);
-    const index = Math.round(((angle + Math.PI) / (Math.PI * 2)) * (bucketCount - 1));
-    const distance = Math.hypot(p.x - cx, p.y - cy);
-    radii[index] = Math.max(radii[index], distance);
-  });
-
-  for (let i = 0; i < radii.length; i++) {
-    if (radii[i]) continue;
-    for (let step = 1; step < radii.length; step++) {
-      const left = radii[(i - step + radii.length) % radii.length];
-      const right = radii[(i + step) % radii.length];
-      if (left && right) {
-        radii[i] = (left + right) / 2;
-        break;
-      }
-      if (left || right) {
-        radii[i] = left || right;
-        break;
-      }
-    }
-  }
-
-  const passes = Math.max(10, Math.round(12 + smoothLevel / 4));
-  for (let pass = 0; pass < passes; pass++) {
-    const copy = radii.slice();
-    for (let i = 0; i < radii.length; i++) {
-      const a = copy[(i - 2 + radii.length) % radii.length];
-      const b = copy[(i - 1 + radii.length) % radii.length];
-      const c = copy[i];
-      const d = copy[(i + 1) % radii.length];
-      const e = copy[(i + 2) % radii.length];
-      radii[i] = (a + b * 2 + c * 4 + d * 2 + e) / 10;
-    }
-  }
-
-  return radii.map((distance, i) => {
-    const angle = -Math.PI + (i / radii.length) * Math.PI * 2;
-    return {
-      x: cx + Math.cos(angle) * distance,
-      y: cy + Math.sin(angle) * distance,
-    };
-  });
-}
-
-function closeMask(mask, w, h, radius) {
-  const dilated = binaryFilter(binaryFilter(mask, w, h, radius, 'max', 'x'), w, h, radius, 'max', 'y');
-  return binaryFilter(binaryFilter(dilated, w, h, radius, 'min', 'x'), w, h, radius, 'min', 'y');
-}
-
-function binaryFilter(mask, w, h, radius, mode, axis) {
-  const out = new Uint8Array(w * h);
-  const wantMax = mode === 'max';
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      let value = wantMax ? 0 : 1;
-      for (let step = -radius; step <= radius; step++) {
-        const xx = axis === 'x' ? x + step : x;
-        const yy = axis === 'y' ? y + step : y;
-        const sample = xx < 0 || xx >= w || yy < 0 || yy >= h ? 0 : mask[yy * w + xx];
-        if (wantMax && sample) {
-          value = 1;
-          break;
-        }
-        if (!wantMax && !sample) {
-          value = 0;
-          break;
-        }
-      }
-      out[y * w + x] = value;
-    }
-  }
-  return out;
 }
 
 function distanceTransform(source, w, h) {
@@ -315,6 +207,8 @@ function distanceTransform(source, w, h) {
 }
 
 function transform1d(values, n) {
+  // Evaluation must read the original costs, not earlier output distances.
+  const costs = values.slice(0, n);
   const v = new Int32Array(n);
   const z = new Float64Array(n + 1);
   let k = 0;
@@ -338,50 +232,64 @@ function transform1d(values, n) {
   for (let q = 0; q < n; q++) {
     while (z[k + 1] < q) k++;
     const d = q - v[k];
-    values[q] = d * d + values[v[k]];
+    values[q] = d * d + costs[v[k]];
   }
 }
 
-function marchingSquares(mask, w, h) {
+function marchingSquares(field, w, h) {
   const segments = [];
-  const pt = (x, y) => ({ x, y });
   const add = (a, b) => segments.push([a, b]);
+  const edge = (x, y, axis, a, b) => {
+    const t = Math.max(1e-7, Math.min(1 - 1e-7, a / (a - b)));
+    return { x: x + (axis === 'x' ? t : 0), y: y + (axis === 'y' ? t : 0), key: `${x},${y},${axis}` };
+  };
 
   for (let y = 0; y < h - 1; y++) {
     for (let x = 0; x < w - 1; x++) {
-      const tl = mask[y * w + x] ? 8 : 0;
-      const tr = mask[y * w + x + 1] ? 4 : 0;
-      const br = mask[(y + 1) * w + x + 1] ? 2 : 0;
-      const bl = mask[(y + 1) * w + x] ? 1 : 0;
+      const a = field[y * w + x];
+      const b = field[y * w + x + 1];
+      const c = field[(y + 1) * w + x + 1];
+      const d = field[(y + 1) * w + x];
+      const tl = a <= 0 ? 8 : 0;
+      const tr = b <= 0 ? 4 : 0;
+      const br = c <= 0 ? 2 : 0;
+      const bl = d <= 0 ? 1 : 0;
       const code = tl | tr | br | bl;
       if (code === 0 || code === 15) continue;
 
-      const top = pt(x + 0.5, y);
-      const right = pt(x + 1, y + 0.5);
-      const bottom = pt(x + 0.5, y + 1);
-      const left = pt(x, y + 0.5);
+      const top = edge(x, y, 'x', a, b);
+      const right = edge(x + 1, y, 'y', b, c);
+      const bottom = edge(x, y + 1, 'x', d, c);
+      const left = edge(x, y, 'y', a, d);
+      const centerInside = (a + b + c + d) <= 0;
 
       if (code === 1) add(left, bottom);
       else if (code === 2) add(bottom, right);
       else if (code === 3) add(left, right);
-      else if (code === 4) add(top, right);
-      else if (code === 5) { add(top, left); add(bottom, right); }
-      else if (code === 6) add(top, bottom);
-      else if (code === 7) add(top, left);
+      else if (code === 4) add(right, top);
+      else if (code === 5) {
+        if (centerInside) { add(left, top); add(right, bottom); }
+        else { add(left, bottom); add(right, top); }
+      }
+      else if (code === 6) add(bottom, top);
+      else if (code === 7) add(left, top);
       else if (code === 8) add(top, left);
       else if (code === 9) add(top, bottom);
-      else if (code === 10) { add(top, right); add(left, bottom); }
+      else if (code === 10) {
+        if (centerInside) { add(top, right); add(bottom, left); }
+        else { add(top, left); add(bottom, right); }
+      }
       else if (code === 11) add(top, right);
-      else if (code === 12) add(left, right);
-      else if (code === 13) add(bottom, right);
-      else if (code === 14) add(left, bottom);
+      else if (code === 12) add(right, left);
+      else if (code === 13) add(right, bottom);
+      else if (code === 14) add(bottom, left);
     }
   }
   return joinSegments(segments);
 }
 
 function joinSegments(segments) {
-  const key = (p) => `${p.x},${p.y}`;
+  const key = (p) => p.key;
   const links = new Map();
   segments.forEach(([a, b], index) => {
     for (const p of [a, b]) {
@@ -409,9 +317,16 @@ function joinSegments(segments) {
       contour.push(current);
       if (key(current) === key(contour[0])) break;
     }
-    if (contour.length > 8) contours.push(contour);
+    if (key(current) === key(contour[0]) && contour.length > 3) contours.push(contour.slice(0, -1));
   }
   return contours;
+}
+
+function signedArea(points) {
+  return points.reduce((area, point, i) => {
+    const next = points[(i + 1) % points.length];
+    return area + point.x * next.y - next.x * point.y;
+  }, 0) / 2;
 }
 
 function longestContour(contours) {
@@ -508,8 +423,10 @@ function drawZone() {
   ctx.lineJoin = 'round';
   ctx.lineCap = 'round';
   ctx.setLineDash(state.dashed ? [10, 8] : []);
-  drawClosedCurve(state.zonePoints);
-  ctx.stroke();
+  for (const contour of state.zoneContours) {
+    drawClosedCurve(contour);
+    ctx.stroke();
+  }
   if (state.dots) {
     ctx.fillStyle = state.color;
     state.zonePoints.forEach((p, i) => {
@@ -670,6 +587,7 @@ function syncBoundMeasures() {
   if (!state.zonePoints.length) return;
   const bounds = zoneBounds();
   state.measures.forEach((measure) => {
+    if (measure.type !== 'linear') return;
     if (measure.boundAxis === 'horizontal') {
       measure.a = { x: bounds.minX, y: bounds.maxY };
       measure.b = { x: bounds.maxX, y: bounds.maxY };
@@ -690,14 +608,18 @@ function pointerPos(event) {
 }
 
 function hitMeasure(point) {
-  for (const measure of state.measures) {
-    for (const key of ['a', 'b']) {
-      if (Math.hypot(point.x - measure[key].x, point.y - measure[key].y) < 14) {
+  const measures = [...state.measures].reverse();
+  const selected = selectedMeasure();
+  if (selected) measures.sort((a, b) => Number(b === selected) - Number(a === selected));
+  for (const measure of measures) {
+    const line = measure.type === 'linear' ? linearDimensionLine(measure) : null;
+    for (const [key, arrow] of [['a', line?.p1], ['b', line?.p2]]) {
+      if ([measure[key], arrow].filter(Boolean).some((p) => Math.hypot(point.x - p.x, point.y - p.y) < 14 / state.zoom)) {
         return { measure, part: key };
       }
     }
     const d = distanceToMeasure(point, measure);
-    if (d < 10) return { measure, part: 'line' };
+    if (d < 10 / state.zoom) return { measure, part: 'line' };
   }
   return null;
 }
@@ -740,11 +662,55 @@ function selectedMeasure() {
 
 function syncMeasurePanel() {
   const measure = selectedMeasure();
+  controls.linearMeasureOptions.hidden = !measure || measure.type !== 'linear';
   if (!measure) return;
   controls.measureType.value = measure.type || 'radius';
   controls.measureText.value = measure.label;
   controls.measureUnit.value = measure.unit;
   controls.measureColor.value = measure.color;
+  controls.measureBinding.checked = Boolean(measure.boundAxis);
+}
+
+function measureAxis(measure) {
+  return measure.axis || measure.boundAxis ||
+    (Math.abs(measure.b.x - measure.a.x) >= Math.abs(measure.b.y - measure.a.y) ? 'horizontal' : 'vertical');
+}
+
+function dragMeasure(drag, point) {
+  const dx = point.x - drag.start.x;
+  const dy = point.y - drag.start.y;
+  const measure = drag.measure;
+  const linear = measure.type === 'linear';
+  const axis = measureAxis(measure);
+  const coordinate = axis === 'horizontal' ? 'x' : 'y';
+  const delta = coordinate === 'x' ? dx : dy;
+  const moved = drag.part === 'line' || !linear ? dx !== 0 || dy !== 0 : delta !== 0;
+  if (!moved && measure.boundAxis) return;
+
+  if (linear) {
+    measure.axis = axis;
+    delete measure.boundAxis;
+  }
+  if (drag.part === 'line') {
+    measure.a = { x: drag.a.x + dx, y: drag.a.y + dy };
+    measure.b = { x: drag.b.x + dx, y: drag.b.y + dy };
+  } else if (linear) {
+    const other = drag.part === 'a' ? 'b' : 'a';
+    const direction = Math.sign(drag[drag.part][coordinate] - drag[other][coordinate]) || (drag.part === 'a' ? -1 : 1);
+    measure[drag.part] = { ...drag[drag.part] };
+    measure[drag.part][coordinate] = drag[other][coordinate] + direction * Math.max(1,
+      direction * (drag[drag.part][coordinate] + delta - drag[other][coordinate]));
+  } else {
+    measure[drag.part] = { x: drag[drag.part].x + dx, y: drag[drag.part].y + dy };
+  }
+  controls.measureBinding.checked = Boolean(measure.boundAxis);
+}
+
+function measureCursor(hit) {
+  if (!hit) return 'crosshair';
+  if (hit.part === 'line') return 'move';
+  if (hit.measure.type !== 'linear') return 'crosshair';
+  return measureAxis(hit.measure) === 'horizontal' ? 'ew-resize' : 'ns-resize';
 }
 
 function updateOutputs() {
@@ -761,6 +727,7 @@ function addHorizontalMeasure() {
     id: crypto.randomUUID(),
     type: 'linear',
     boundAxis: 'horizontal',
+    axis: 'horizontal',
     a: { x: bounds.minX, y: bounds.maxY },
     b: { x: bounds.maxX, y: bounds.maxY },
     label: '5,00',
@@ -779,6 +746,7 @@ function addVerticalMeasure() {
     id: crypto.randomUUID(),
     type: 'linear',
     boundAxis: 'vertical',
+    axis: 'vertical',
     a: { x: bounds.minX, y: bounds.minY },
     b: { x: bounds.minX, y: bounds.maxY },
     label: '2,53',
@@ -889,7 +857,26 @@ controls.measureText.addEventListener('input', () => {
 
 controls.measureType.addEventListener('change', () => {
   const measure = selectedMeasure();
-  if (measure) measure.type = controls.measureType.value;
+  if (measure) {
+    measure.type = controls.measureType.value;
+    delete measure.boundAxis;
+    if (measure.type === 'linear') {
+      measure.axis = measureAxis(measure);
+      if (measure.axis === 'horizontal') measure.b.y = measure.a.y;
+      else measure.b.x = measure.a.x;
+    } else {
+      delete measure.axis;
+    }
+  }
+  syncMeasurePanel();
+  render();
+});
+
+controls.measureBinding.addEventListener('change', () => {
+  const measure = selectedMeasure();
+  if (!measure || measure.type !== 'linear') return;
+  if (controls.measureBinding.checked) measure.boundAxis = measureAxis(measure);
+  else delete measure.boundAxis;
   render();
 });
 
@@ -909,29 +896,30 @@ canvas.addEventListener('pointerdown', (event) => {
   const point = pointerPos(event);
   const hit = hitMeasure(point);
   if (!hit) return;
+  event.preventDefault();
   state.selectedMeasure = hit.measure.id;
   syncMeasurePanel();
   state.drag = { part: hit.part, start: point, measure: hit.measure, a: { ...hit.measure.a }, b: { ...hit.measure.b } };
   canvas.setPointerCapture(event.pointerId);
+  canvas.style.cursor = measureCursor(hit);
   render();
 });
 
 canvas.addEventListener('pointermove', (event) => {
-  if (!state.drag) return;
   const point = pointerPos(event);
-  const dx = point.x - state.drag.start.x;
-  const dy = point.y - state.drag.start.y;
-  if (state.drag.part === 'line') {
-    state.drag.measure.a = { x: state.drag.a.x + dx, y: state.drag.a.y + dy };
-    state.drag.measure.b = { x: state.drag.b.x + dx, y: state.drag.b.y + dy };
-  } else {
-    state.drag.measure[state.drag.part] = { x: state.drag[state.drag.part].x + dx, y: state.drag[state.drag.part].y + dy };
+  if (!state.drag) {
+    canvas.style.cursor = measureCursor(hitMeasure(point));
+    return;
   }
+  dragMeasure(state.drag, point);
   render();
 });
 
-canvas.addEventListener('pointerup', () => {
-  state.drag = null;
+['pointerup', 'pointercancel', 'lostpointercapture'].forEach((type) => {
+  canvas.addEventListener(type, () => {
+    state.drag = null;
+    canvas.style.cursor = 'crosshair';
+  });
 });
 
 document.getElementById('toggleGrid').addEventListener('click', () => {
