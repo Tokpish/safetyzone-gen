@@ -26,7 +26,7 @@ function loadApp() {
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../app.js'), 'utf8') + `
     globalThis.app = { state, controls, transform1d, distanceTransform, marchingSquares, signedArea,
       smoothClosedPolyline, addHorizontalMeasure, addVerticalMeasure, linearDimensionLine,
-      hitMeasure, syncBoundMeasures, dragMeasure, render, buildZone };
+      hitMeasure, syncBoundMeasures, dragMeasure, render, buildZone, applyZoneOffsets };
   `, context);
   return { ...context.app, elements, document };
 }
@@ -218,9 +218,52 @@ test('complete build maps symmetric input back to the displayed image center and
     const points = app.state.zonePoints;
     const pointSet = new Set(points.map(p => `${p.x.toFixed(3)},${p.y.toFixed(3)}`));
     for (const p of points) assert.ok(pointSet.has(`${(2 * center - p.x).toFixed(3)},${p.y.toFixed(3)}`));
+    const bounds = ps => ({
+      left: Math.min(...ps.map(p => p.x)), right: Math.max(...ps.map(p => p.x)),
+      top: Math.min(...ps.map(p => p.y)), bottom: Math.max(...ps.map(p => p.y)),
+    });
+    const original = bounds(points);
+    for (const side of ['left', 'right', 'top', 'bottom']) {
+      const control = app.controls['offset' + side[0].toUpperCase() + side.slice(1)];
+      for (const amount of [60, -25, 1000]) {
+        control.value = String(amount);
+        app.buildZone();
+        const changed = bounds(app.state.zonePoints);
+        for (const edge of ['left', 'right', 'top', 'bottom']) {
+          const expected = original[edge] + (edge === side ? amount * (side === 'left' || side === 'top' ? -1 : 1) : 0);
+          assert.ok(Math.abs(changed[edge] - expected) < 1e-8, `${side} ${amount} changed ${edge} incorrectly`);
+        }
+        const fixed = side === 'left' || side === 'right' ? 'y' : 'x';
+        assert.equal(app.state.zonePoints.length, points.length);
+        app.state.zonePoints.forEach((p, i) => assert.equal(p[fixed], points[i][fixed]));
+      }
+      control.value = '0';
+    }
+    app.buildZone();
+    assert.deepEqual(app.state.zonePoints, points);
   }
   blank = true;
   app.buildZone();
   assert.equal(app.state.zonePoints.length, 0);
   assert.equal(app.state.zoneContours.length, 0);
+});
+
+test('directional offsets preserve smooth tangents, disconnected contours, and combined bounds', () => {
+  const app = loadApp();
+  const contours = [0, 300].map(cx => Array.from({ length: 360 }, (_, i) => ({
+    x: cx + 100 * Math.cos(i * Math.PI / 180), y: 200 + 80 * Math.sin(i * Math.PI / 180),
+  })));
+  const shifted = app.applyZoneOffsets(contours, { left: 60, right: 20, top: 15, bottom: 30 });
+  assert.equal(shifted.length, 2);
+  shifted.forEach((contour, j) => contour.forEach((p, i) => {
+    const original = contours[j][i];
+    assert.ok(Math.abs(p.x - (-160 + (original.x + 100) * 580 / 500)) < 1e-9);
+    assert.ok(Math.abs(p.y - (105 + (original.y - 120) * 205 / 160)) < 1e-9);
+    const next = contour[(i + 1) % contour.length];
+    assert.ok(Math.hypot(next.x - p.x, next.y - p.y) < 3, 'unexpected step in the contour');
+  }));
+  const compressed = app.applyZoneOffsets(contours, { left: -1000, right: -1000, top: -1000, bottom: -1000 }).flat();
+  assert.ok(compressed.every(p => Number.isFinite(p.x) && Number.isFinite(p.y)));
+  assert.ok(Math.abs(Math.max(...compressed.map(p => p.x)) - Math.min(...compressed.map(p => p.x)) - 1) < 1e-8);
+  assert.deepEqual(app.applyZoneOffsets([], { left: 60, right: 0, top: 0, bottom: 0 }), []);
 });

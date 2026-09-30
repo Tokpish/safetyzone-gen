@@ -117,8 +117,7 @@ function buildZone() {
     left: Number(controls.offsetLeft.value) || 0,
     right: Number(controls.offsetRight.value) || 0,
   };
-  const padding = radius + 36 + Math.max(0, offsets.top, offsets.bottom)
-    + Math.max(0, offsets.left, offsets.right);
+  const padding = radius + 36;
   const maxSide = Math.max(state.imageRect.w + padding * 2, state.imageRect.h + padding * 2);
   const scale = Math.min(1, 680 / maxSide);
   const w = Math.ceil((state.imageRect.w + padding * 2) * scale);
@@ -166,23 +165,47 @@ function buildZone() {
 
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
-      const dx = x - (imageX + (imageW - 1) / 2);
-      const dy = y - (imageY + (imageH - 1) / 2);
-      const sideOffset = ((dx < 0 ? offsets.left : offsets.right) + (dy < 0 ? offsets.top : offsets.bottom)) * scale;
-      const localRadius = Math.max(0.5, radiusGrid + sideOffset);
-      field[y * w + x] = Math.sqrt(distance[y * w + x]) - localRadius;
+      field[y * w + x] = Math.sqrt(distance[y * w + x]) - radiusGrid;
     }
   }
 
   // Trace the actual distance isoline, without fitting a radial envelope around it.
-  state.zoneContours = marchingSquares(field, w, h)
+  const contours = marchingSquares(field, w, h)
     .filter((contour) => signedArea(contour) > 0)
     .map((contour) => smoothClosedPolyline(contour, Math.round(smoothLevel / 50)).map((p) => ({
       x: state.imageRect.x + (p.x + 0.5 - imageX) * state.imageRect.w / imageW,
       y: state.imageRect.y + (p.y + 0.5 - imageY) * state.imageRect.h / imageH,
     })));
+  state.zoneContours = applyZoneOffsets(contours, offsets);
   state.zonePoints = state.zoneContours.flat();
   syncBoundMeasures();
+}
+
+function applyZoneOffsets(contours, offsets) {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const contour of contours) for (const p of contour) {
+    minX = Math.min(minX, p.x);
+    maxX = Math.max(maxX, p.x);
+    minY = Math.min(minY, p.y);
+    maxY = Math.max(maxY, p.y);
+  }
+  if (!Number.isFinite(minX)) return contours;
+  const width = Math.max(1e-6, maxX - minX);
+  const height = Math.max(1e-6, maxY - minY);
+  // Adjust bounds continuously on each axis; do not change the distance radius by quadrant.
+  // Clamp excessive inward offsets proportionally so the contour cannot invert.
+  const limit = (size, before, after) => {
+    const expansion = Math.max(0, before) + Math.max(0, after);
+    const contraction = Math.max(0, -before) + Math.max(0, -after);
+    const factor = contraction ? Math.min(1, (size + expansion - Math.min(1, size)) / contraction) : 1;
+    return [before < 0 ? before * factor : before, after < 0 ? after * factor : after];
+  };
+  const [left, right] = limit(width, offsets.left, offsets.right);
+  const [top, bottom] = limit(height, offsets.top, offsets.bottom);
+  return contours.map(contour => contour.map(p => ({
+    x: p.x - left * (maxX - p.x) / width + right * (p.x - minX) / width,
+    y: p.y - top * (maxY - p.y) / height + bottom * (p.y - minY) / height,
+  })));
 }
 
 function distanceTransform(source, w, h) {
